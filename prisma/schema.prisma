@@ -1,0 +1,315 @@
+generator client {
+  provider = "prisma-client-js"
+}
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  SUPER_ADMIN
+  EDITOR
+  SOURCE_OPERATOR
+  MODERATOR
+  USER
+}
+enum FetchMethod {
+  RSS
+  ATOM
+  API
+  MANUAL
+}
+enum HealthStatus {
+  UNKNOWN
+  HEALTHY
+  DEGRADED
+  FAILING
+}
+enum ArticleStatus {
+  PUBLISHED
+  HIDDEN
+  PENDING_REVIEW
+}
+enum ReviewStatus {
+  UNREVIEWED
+  REVIEWED
+  NEEDS_REVIEW
+}
+enum ClaimStatus {
+  SUPPORTED_BY_EVIDENCE
+  REFUTED_BY_EVIDENCE
+  NEEDS_MORE_REVIEW
+  CONFLICTING_EVIDENCE
+  NOT_ASSESSABLE
+}
+enum EvidenceStance {
+  SUPPORTS
+  REFUTES
+  CONTEXT
+}
+enum RunStatus {
+  RUNNING
+  SUCCESS
+  PARTIAL
+  FAILED
+}
+enum JobStatus {
+  QUEUED
+  RUNNING
+  DONE
+  FAILED
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String?
+  role         Role     @default(USER)
+  createdAt    DateTime @default(now())
+  deletedAt    DateTime?
+  preference   UserPreference?
+  followed     FollowedTopic[]
+  saved        SavedArticle[]
+  collections  Collection[]
+  notifications Notification[]
+  audits       AuditLog[]
+}
+
+model NewsSource {
+  id                   String       @id @default(cuid())
+  name                 String
+  domain               String       @unique
+  country              String       @default("IR")
+  method               FetchMethod  @default(RSS)
+  feedUrl              String
+  active               Boolean      @default(false)
+  fetchIntervalMinutes Int          @default(15)
+  termsNotes           String       // license / terms-of-use basis for fetching
+  termsConfirmed       Boolean      @default(false)
+  health               HealthStatus @default(UNKNOWN)
+  lastAttemptAt        DateTime?
+  lastSuccessAt        DateTime?
+  lastError            String?
+  settings             Json         @default("{}")
+  createdAt            DateTime     @default(now())
+  articles             Article[]
+  runs                 IngestionRun[]
+}
+
+model Category {
+  id       String @id @default(cuid())
+  slug     String @unique
+  name     String
+  articles Article[]
+}
+
+model Tag {
+  id    String @id @default(cuid())
+  name  String @unique
+  articles ArticleTag[]
+}
+
+model Article {
+  id                   String        @id @default(cuid())
+  sourceId             String
+  source               NewsSource    @relation(fields: [sourceId], references: [id], onDelete: Restrict)
+  guid                 String?
+  url                  String
+  urlNormalized        String
+  title                String
+  excerpt              String?       // only what the feed permits
+  imageUrl             String?
+  searchText           String        // normalized title + excerpt
+  contentHash          String
+  publishedAt          DateTime?     // source-declared; null when unknown (never faked)
+  sourceUpdatedAt      DateTime?
+  fetchedAt            DateTime      @default(now())
+  status               ArticleStatus @default(PUBLISHED)
+  version              Int           @default(1)
+  categoryId           String?
+  category             Category?     @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  possibleDuplicateOfId String?      // flag for review, never auto-hidden
+  duplicateScore       Float?
+  revisions            ArticleRevision[]
+  tags                 ArticleTag[]
+  events               EventArticle[]
+  claims               Claim[]
+  summaries            Summary[]
+  saved                SavedArticle[]
+  @@unique([sourceId, urlNormalized])
+  @@index([publishedAt])
+  @@index([fetchedAt])
+  @@index([categoryId, publishedAt])
+  @@index([contentHash])
+}
+
+model ArticleRevision {
+  id            String   @id @default(cuid())
+  articleId     String
+  article       Article  @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  version       Int
+  changeType    String   // TITLE, TEXT, NUMBER, TYPO, NEW_INFO, SUMMARY, CLAIM_STATUS
+  changedFields Json
+  reason        String?
+  createdAt     DateTime @default(now())
+  @@unique([articleId, version])
+}
+
+model ArticleTag {
+  articleId String
+  tagId     String
+  article   Article @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  tag       Tag     @relation(fields: [tagId], references: [id], onDelete: Cascade)
+  @@id([articleId, tagId])
+}
+
+model Event {
+  id          String   @id @default(cuid())
+  title       String
+  description String?
+  occurredAt  DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  articles    EventArticle[]
+}
+
+model EventArticle {
+  eventId      String
+  articleId    String
+  event        Event   @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  article      Article @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  occurredAt   DateTime?
+  reviewStatus ReviewStatus @default(UNREVIEWED)
+  @@id([eventId, articleId])
+}
+
+model Claim {
+  id          String      @id @default(cuid())
+  articleId   String
+  article     Article     @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  text        String
+  status      ClaimStatus @default(NEEDS_MORE_REVIEW)
+  conclusion  String?
+  limitations String?
+  humanReviewed Boolean   @default(false)
+  createdAt   DateTime    @default(now())
+  evidence    ClaimEvidence[]
+}
+
+model ClaimEvidence {
+  id        String         @id @default(cuid())
+  claimId   String
+  claim     Claim          @relation(fields: [claimId], references: [id], onDelete: Cascade)
+  stance    EvidenceStance
+  sourceUrl String
+  note      String?
+  independentOrigin String? // shared primary origin key, to avoid double-counting
+}
+
+model Summary {
+  id           String   @id @default(cuid())
+  articleId    String
+  article      Article  @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  kind         String   // SHORT, MEDIUM, FULL
+  text         String
+  model        String
+  sourceHash   String   // contentHash the summary was generated from
+  valid        Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  @@unique([articleId, kind, sourceHash])
+}
+
+model SavedArticle {
+  userId    String
+  articleId String
+  note      String?   // private
+  savedAt   DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  article   Article   @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  items     CollectionItem[]
+  @@id([userId, articleId])
+}
+
+model Collection {
+  id     String @id @default(cuid())
+  userId String
+  name   String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items  CollectionItem[]
+  @@unique([userId, name])
+}
+
+model CollectionItem {
+  collectionId String
+  userId       String
+  articleId    String
+  collection   Collection   @relation(fields: [collectionId], references: [id], onDelete: Cascade)
+  saved        SavedArticle @relation(fields: [userId, articleId], references: [userId, articleId], onDelete: Cascade)
+  @@id([collectionId, articleId])
+}
+
+model UserPreference {
+  userId   String @id
+  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  settings Json   @default("{}") // feed, notification and reading-mode settings
+  updatedAt DateTime @updatedAt
+}
+
+model FollowedTopic {
+  id     String @id @default(cuid())
+  userId String
+  topic  String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@unique([userId, topic])
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      String
+  title     String
+  link      String?
+  dedupeKey String
+  readAt    DateTime?
+  createdAt DateTime @default(now())
+  @@unique([userId, dedupeKey])
+}
+
+model IngestionRun {
+  id         String     @id @default(cuid())
+  sourceId   String
+  source     NewsSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  status     RunStatus  @default(RUNNING)
+  startedAt  DateTime   @default(now())
+  finishedAt DateTime?
+  itemsSeen  Int        @default(0)
+  itemsNew   Int        @default(0)
+  itemsUpdated Int      @default(0)
+  itemsFlagged Int      @default(0)
+  error      String?
+  @@index([sourceId, startedAt])
+}
+
+model ProcessingJob {
+  id        String    @id @default(cuid())
+  type      String
+  payload   Json
+  status    JobStatus @default(QUEUED)
+  attempts  Int       @default(0)
+  lastError String?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  actorId   String?
+  actor     User?    @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  action    String
+  target    String?
+  meta      Json?    // never secrets
+  createdAt DateTime @default(now())
+  @@index([createdAt])
+}

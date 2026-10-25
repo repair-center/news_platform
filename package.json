@@ -1,0 +1,25 @@
+{
+  "name": "news-platform",
+  "private": true,
+  "workspaces": ["packages/*", "apps/*"],
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate dev",
+    "db:deploy": "prisma migrate deploy",
+    "db:seed": "tsx prisma/seed.ts",
+    "build:core": "npm run build -w @news/core",
+    "build": "npm run build:core && npm run build -w @news/api && npm run build -w @news/worker && npm run build -w @news/web",
+    "typecheck": "npm run typecheck -w @news/core",
+    "test": "npm run test -w @news/core",
+    "dev:api": "npm run start:dev -w @news/api",
+    "dev:worker": "npm run dev -w @news/worker",
+    "dev:web": "npm run dev -w @news/web",
+    "dev": "concurrently -n api,worker,web -c blue,green,magenta \"npm:dev:api\" \"npm:dev:worker\" \"npm:dev:web\"",
+    "start:api": "npm run start -w @news/api",
+    "start:worker": "npm run start -w @news/worker",
+    "start:web": "npm run start -w @news/web"
+  },
+  "devDependencies": { "@prisma/client": "^6.0.0", "concurrently": "^9.0.0", "prisma": "^6.0.0", "tsx": "^4.19.0", "typescript": "^5.6.0" },
+  "prisma": { "seed": "tsx prisma/seed.ts" }
+}
